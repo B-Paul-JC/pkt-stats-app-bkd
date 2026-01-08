@@ -3,11 +3,13 @@ matplotlib.use('Agg') # Non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
+import numpy as np
 import sys
 import json
 import os
+import math
 
-# Try to apply a style, fallback to default if not available
+# Try to apply a style
 try:
     plt.style.use('ggplot')
 except:
@@ -25,6 +27,12 @@ def process_charts(config):
         "images": []
     }
 
+    # Log the requests to a file
+    log_filename = f"requests_{config.get('job_id', 'temp')}.log"
+    log_path = os.path.join(output_dir, log_filename)
+    with open(log_path, 'w') as log_file:
+        log_file.write(json.dumps(requests, indent=2))
+
     pdf_filename = f"report_{config.get('job_id', 'temp')}.pdf"
     pdf_path = os.path.join(output_dir, pdf_filename)
     
@@ -32,134 +40,142 @@ def process_charts(config):
         with PdfPages(pdf_path) as pdf:
             for req in requests:
                 try:
-                    # --- 1. Parse Request ---
+                    # --- 1. Parse & Validate ---
                     data = req.get('data')
                     chart_type = req.get('type', 'bar').lower()
                     key_col = req.get('key_col')
                     title = req.get('title', 'Untitled')
                     fname = req.get('filename', 'chart')
                     
-                    # Convert to DataFrame
                     df = pd.DataFrame(data)
                     
-                    # Validate Data
-                    if key_col not in df.columns:
-                        sys.stderr.write(f"Skipping {title}: Key column '{key_col}' not found.\n")
+                    if df.empty or key_col not in df.columns:
+                        sys.stderr.write(f"Skipping {title}: Data empty or key column missing.\n")
                         continue 
 
-                    # Set Key Column as Index (Standard behavior for X-axis labels)
                     df.set_index(key_col, inplace=True)
                     
-                    # Initialize Figure
-                    fig = None
-                    ax = None
-
                     # --- 2. Handle Chart Types ---
-                    
-                    # TYPE: Statistical Table
+
+                    # === TYPE: STATISTICAL TABLE (PAGINATED) ===
                     if chart_type == 'table':
-                        fig, ax = plt.subplots(figsize=(8.27, 11.69)) # A4 Portrait
-                        ax.axis('off')
-                        
-                        # Sort by first numeric column if available
-                        try:
-                            numeric_cols = df.select_dtypes(include=['number']).columns
-                            if len(numeric_cols) > 0:
-                                df = df.sort_values(by=numeric_cols[0], ascending=False)
-                        except: pass
-
-                        # Render Table
-                        df_reset = df.reset_index().round(2)
-                        cell_text = [[str(x) for x in row] for row in df_reset.values]
-                        col_labels = df_reset.columns.to_list()
-
-                        table = ax.table(cellText=cell_text, colLabels=col_labels, loc='upper center', cellLoc='center')
-                        table.auto_set_font_size(False)
-                        table.set_fontsize(10)
-                        table.scale(1, 1.5)
-                        
-                        # Style Header
-                        for (row, col), cell in table.get_celld().items():
-                            if row == 0:
-                                cell.set_text_props(weight='bold')
-                                cell.set_facecolor('#e6e6e6')
-                        
-                        plt.title(title, pad=20, fontweight='bold', y=0.95)
-
-                    # TYPE: Pie Chart
-                    elif chart_type == 'pie':
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        # Pie charts in pandas need `y` or `subplots=True`. We take the first numeric column.
+                        # Analysis: Sort by first numeric column
                         numeric_cols = df.select_dtypes(include=['number']).columns
                         if len(numeric_cols) > 0:
-                            y_col = numeric_cols[0]
-                            df.plot.pie(y=y_col, ax=ax, autopct='%1.1f%%', startangle=90, legend=True)
-                            ax.set_ylabel('') # Hide the column name on Y axis for cleaner look
-                        else:
-                            ax.text(0.5, 0.5, "No numeric data for Pie Chart", ha='center')
+                            df = df.sort_values(by=numeric_cols[0], ascending=False)
 
-                    # TYPE: Scatter Plot
-                    elif chart_type == 'scatter':
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        # Scatter needs explicit X and Y columns. 
-                        # We reset index so the "Key Column" becomes a regular column accessible for X.
-                        df_reset = df.reset_index()
-                        numeric_cols = df_reset.select_dtypes(include=['number']).columns
+                        # Prepare Data
+                        df_reset = df.reset_index().round(2)
                         
-                        if len(numeric_cols) >= 2:
-                            # Use first two numeric columns as X and Y
-                            x_c, y_c = numeric_cols[0], numeric_cols[1]
-                            df_reset.plot.scatter(x=x_c, y=y_c, ax=ax, s=100, alpha=0.7)
-                        elif len(numeric_cols) == 1 and key_col:
-                            # Use Key Col as X (if numeric) and the Value col as Y
-                            try:
-                                df_reset.plot.scatter(x=key_col, y=numeric_cols[0], ax=ax, s=100)
-                            except:
-                                ax.text(0.5, 0.5, "Scatter requires numeric X and Y", ha='center')
-                        else:
-                            ax.text(0.5, 0.5, "Not enough numeric data for Scatter", ha='center')
+                        # Add Summary Row (Analysis)
+                        if len(numeric_cols) > 0:
+                            summary_row = {col: '' for col in df_reset.columns}
+                            summary_row[df_reset.columns[0]] = "TOTAL" # Label Col
+                            for col in numeric_cols:
+                                summary_row[col] = df[col].sum()
+                            
+                            # Append using loc (safe for different pandas versions)
+                            df_reset.loc[len(df_reset)] = summary_row
 
-                    # TYPE: Standard Plots (Bar, Line, Area, Hist, Box, KDE)
+                        # Convert to List of Lists for Table
+                        # Force all to string to prevent rendering crashes
+                        all_values = [[str(x) for x in row] for row in df_reset.values]
+                        col_labels = df_reset.columns.to_list()
+                        
+                        # Pagination Logic
+                        ROWS_PER_PAGE = 30
+                        total_rows = len(all_values)
+                        total_pages = math.ceil(total_rows / ROWS_PER_PAGE)
+
+                        for page in range(total_pages):
+                            fig, ax = plt.subplots(figsize=(8.27, 11.69)) # A4 Portrait
+                            ax.axis('off')
+
+                            # Slice data for this page
+                            start_row = page * ROWS_PER_PAGE
+                            end_row = min((page + 1) * ROWS_PER_PAGE, total_rows)
+                            page_data = all_values[start_row:end_row]
+
+                            # Create Table
+                            table = ax.table(
+                                cellText=page_data, 
+                                colLabels=col_labels, 
+                                loc='upper center', 
+                                cellLoc='center'
+                            )
+                            
+                            # Styling
+                            table.auto_set_font_size(False)
+                            table.set_fontsize(10)
+                            table.scale(1, 1.4)
+
+                            # Header Styling
+                            for (row, col), cell in table.get_celld().items():
+                                if row == 0:
+                                    cell.set_text_props(weight='bold', color='white')
+                                    cell.set_facecolor('#4a4a4a') # Dark Header
+                                elif row % 2 == 0:
+                                    cell.set_facecolor('#f2f2f2') # Zebra Striping
+
+                            # Page Title
+                            page_title = f"{title}"
+                            if total_pages > 1:
+                                page_title += f" (Page {page + 1}/{total_pages})"
+                            
+                            plt.title(page_title, pad=20, fontweight='bold', y=0.98)
+
+                            # Save Page to PDF
+                            pdf.savefig(fig, bbox_inches='tight')
+                            
+                            # Save First Page as the Preview Image
+                            if page == 0:
+                                img_filename = f"{fname}_{config.get('job_id')}.png"
+                                img_path = os.path.join(output_dir, img_filename)
+                                plt.savefig(img_path, format='png', dpi=100, bbox_inches='tight')
+                                response['images'].append({"id": fname, "path": img_filename})
+
+                            plt.close(fig)
+
+                    # === TYPE: VISUAL CHARTS ===
                     else:
                         fig, ax = plt.subplots(figsize=(10, 6))
                         
-                        # Map frontend types to Pandas/Matplotlib types
+                        # Chart Logic
                         kind = chart_type
-                        
-                        # Handle KDE (Density) Dependency
-                        if kind == 'kde':
-                            try:
-                                import scipy
-                            except ImportError:
-                                sys.stderr.write(f"Warning: SciPy not installed. Fallback to Hist for {title}.\n")
-                                kind = 'hist'
+                        if chart_type == 'pie':
+                            numeric_cols = df.select_dtypes(include=['number']).columns
+                            if len(numeric_cols) > 0:
+                                df.plot.pie(y=numeric_cols[0], ax=ax, autopct='%1.1f%%', legend=False)
+                                ax.set_ylabel('')
+                        elif chart_type == 'scatter':
+                            # Reset index to access key_col as X
+                            df_scat = df.reset_index()
+                            num_cols = df_scat.select_dtypes(include=['number']).columns
+                            if len(num_cols) >= 2:
+                                df_scat.plot.scatter(x=num_cols[0], y=num_cols[1], ax=ax, s=50)
+                            else:
+                                ax.text(0.5, 0.5, "Scatter requires 2+ numeric cols", ha='center')
+                        else:
+                            # Standard plots (bar, line, etc.)
+                            if chart_type == 'kde':
+                                try: import scipy
+                                except: kind = 'hist' # Fallback
+                            
+                            df.plot(kind=kind, ax=ax, rot=45 if len(df) > 8 else 0)
+                            ax.set_xlabel(key_col)
+                            ax.set_ylabel("Values")
+                            if len(ax.get_legend_handles_labels()[1]) > 0:
+                                ax.legend(title="Legend")
+                            plt.grid(True, linestyle='--', alpha=0.5)
 
-                        # Plotting
-                        try:
-                            # rot=0 keeps x-axis labels horizontal
-                            df.plot(kind=kind, ax=ax, rot=45 if len(df) > 5 else 0) 
-                        except Exception as e:
-                            ax.text(0.5, 0.5, f"Error plotting {kind}: {str(e)}", ha='center')
-
-                        ax.set_xlabel(key_col)
-                        ax.set_ylabel("Values")
-                        ax.legend(title="Legend")
-                        plt.grid(True, linestyle='--', alpha=0.5)
-
-                    # --- 3. Finalize & Save ---
-                    if fig:
                         plt.title(title)
                         plt.tight_layout()
 
-                        # Save PNG
+                        # Save Image
                         img_filename = f"{fname}_{config.get('job_id')}.png"
                         img_path = os.path.join(output_dir, img_filename)
                         plt.savefig(img_path, format='png', dpi=100, bbox_inches='tight')
-                        
-                        response['images'].append({
-                            "id": fname,
-                            "path": img_filename
-                        })
+                        response['images'].append({"id": fname, "path": img_filename})
 
                         # Save to PDF
                         pdf.savefig(fig, bbox_inches='tight')
