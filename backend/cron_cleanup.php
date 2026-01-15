@@ -3,7 +3,7 @@
 
 // 1. Configuration
 // Using absolute path as requested for reliability in Laragon
-$storageDir = 'C:/laragon/www/backend/storage';
+$storageDir = 'C:\laragon\www\exinsab\backend\storage';
 $retentionPeriod = 3600; // 1 Hour in seconds
 
 echo "[" . date('Y-m-d H:i:s') . "] Starting cleanup...\n";

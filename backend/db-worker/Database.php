@@ -1,10 +1,22 @@
 <?php
 class Database {
-    private $host = "localhost";
+    // Default configuration
+    private $host = "192.168.3.83";
     private $db_name = "student_ui_portal";
     private $username = "root";
-    private $password = ""; // Add your password if set
+    private $password = ""; 
     public $conn;
+
+    /**
+     * Constructor accepts optional configuration override
+     * Usage: new Database(['db_name' => 'other_db', 'username' => 'admin'])
+     */
+    public function __construct($config = []) {
+        if (isset($config['host'])) $this->host = $config['host'];
+        if (isset($config['db_name'])) $this->db_name = $config['db_name'];
+        if (isset($config['username'])) $this->username = $config['username'];
+        if (isset($config['password'])) $this->password = $config['password'];
+    }
 
     public function getConnection() {
         $this->conn = null;
@@ -13,7 +25,6 @@ class Database {
             $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $this->conn->exec("set names utf8");
         } catch(PDOException $exception) {
-            // Log error in a real app, don't expose to user
             throw new Exception("Connection error: " . $exception->getMessage());
         }
         return $this->conn;

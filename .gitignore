@@ -49,6 +49,7 @@ htmlcov/
 # others
 /backend/storage/
 /backend/db-worker/queries.log
-tomolu.py
+tomolu
 index.php
-dummy_profiles.sql
+dummy_profiles
+dummy_profiles_nigeria
