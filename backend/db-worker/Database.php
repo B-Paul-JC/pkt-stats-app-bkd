@@ -4,7 +4,7 @@ class Database {
     private $host = "192.168.3.83";
     private $db_name = "student_ui_portal";
     private $username = "root";
-    private $password = ""; 
+    private $password = "password"; 
     public $conn;
 
     /**

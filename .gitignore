@@ -53,3 +53,7 @@ tomolu
 index.php
 dummy_profiles
 dummy_profiles_nigeria
+*.json
+*.pdf
+debug_query.sql
+error.log
