@@ -57,3 +57,5 @@ dummy_profiles_nigeria
 *.pdf
 debug_query.sql
 error.log
+*.xlsx
+trade.py
