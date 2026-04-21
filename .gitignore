@@ -59,3 +59,4 @@ debug_query.sql
 error.log
 *.xlsx
 trade.py
+ignore/
